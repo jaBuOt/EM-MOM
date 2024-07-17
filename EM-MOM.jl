@@ -16,7 +16,12 @@ using DataFrames
 
 function forwardProp()
 
+    aa[1] = 0 
+
     for i ∈ 1:xLen
+
+        ro[1, i] = 0
+        
         for j ∈ 1:xLen
             for k ∈ 1:yLen
                 # print("hello")
@@ -41,7 +46,13 @@ function forwardProp()
     end
             
     for i ∈ 2:N
+
+        aa[i] = 0
+        
         for j ∈ 1:xLen
+
+            ro[i, j] = 0
+            
             for k ∈ 1:xLen
                 ro[i, j] = ro[i, j] .+ fil[i-1, k] * p[k, findfirst(isequal(Y[i-1]), ySpace), j, findfirst(isequal(Y[i]), ySpace)]
             end
@@ -170,7 +181,7 @@ function updateP()
 
                     # print(prob)
 
-                    if indexin(Y[1], ySpace) == l
+                    if findfirst(isequal(Y[1]), ySpace) == l
                         # print("hello")
                         num = prob * (chi0[i, k, j] * mu[i, j] + sum)
                     else
@@ -179,9 +190,11 @@ function updateP()
                     # print(num, " ")
 
                     den = 0
-                    sum = 0 
 
                     for m ∈ 1:xLen
+                        
+                        sum = 0 
+                        
                         for n ∈ 1:N-1
                             # if indexin(Y[n], ySpace) == j 
                             if findfirst(isequal(Y[n]), ySpace) == j

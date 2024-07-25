@@ -10,13 +10,16 @@ using Parameters
 using StatsBase
 using CSV
 using DataFrames
+using MacroTools
+using Base.Threads
+using StaticArrays
 
 # Performs forward propagation where the ro, a and filter functions
 # are updated. Returns the updated ro, a and filter
 
-function forwardProp()
+function forwardProp(aa, chi, chi0, fil, mu, p, ro)
 
-    aa[1] = 0 
+    aa[1] = 0
 
     for i ∈ 1:xLen
 
@@ -48,11 +51,11 @@ function forwardProp()
     for i ∈ 2:N
 
         aa[i] = 0
-        
+
         for j ∈ 1:xLen
 
             ro[i, j] = 0
-            
+
             for k ∈ 1:xLen
                 ro[i, j] = ro[i, j] .+ fil[i-1, k] * p[k, findfirst(isequal(Y[i-1]), ySpace), j, findfirst(isequal(Y[i]), ySpace)]
             end
@@ -68,12 +71,14 @@ function forwardProp()
             end
         end
     end
+
+    aa, chi, chi0, fil, mu, p, ro
 end
 
 # Performs backward propagation where the chi and chi0 functions
 # are updated. Returns the updated chi and chi0
 
-function backwardProp()
+function backwardProp(aa, chi, chi0, fil, mu, p, ro)
 
     for i ∈ 1:xLen
         for j ∈ 1:xLen
@@ -149,11 +154,13 @@ function backwardProp()
             end
         end
     end
+
+    return aa, chi, chi0, fil, mu, p, ro
 end
 
 # Updates and returns the current transition probability function p
 
-function updateP()
+function updateP(aa, chi, chi0, fil, mu, p, ro)
 
     for i ∈ 1:xLen
         for j ∈ 1:yLen
@@ -189,12 +196,12 @@ function updateP()
                     end
                     # print(num, " ")
 
-                    den = 0
+                    den = 0 
 
                     for m ∈ 1:xLen
-                        
-                        sum = 0 
-                        
+
+                        sum = 0
+
                         for n ∈ 1:N-1
                             # if indexin(Y[n], ySpace) == j 
                             if findfirst(isequal(Y[n]), ySpace) == j
@@ -224,11 +231,13 @@ function updateP()
             end
         end
     end
+
+    return aa, chi, chi0, fil, mu, p, ro
 end
 
 # Updates and returns the current initial probability density mu
 
-function updateMu()
+function updateMu(aa, chi, chi0, fil, mu, p, ro)
 
     for i ∈ 1:xLen
         for j ∈ 1:yLen
@@ -285,12 +294,14 @@ function updateMu()
             # print(den)
         end
     end
+
+    return aa, chi, chi0, fil, mu, p, ro
 end
 
 # Calculate difference between current p and mu and previous p and mu 
 # to assess convergence. Returns a cumulative difference for p and mu
 
-function calcConvergence(pCopy, muCopy)
+function calcConvergence(pCopy, muCopy, p, mu)
 
     pDiff = 0
     muDiff = 0
@@ -312,28 +323,66 @@ end
 
 function emMom()
 
+    # Initialize p
+
+    p = @MArray zeros(Float64, xLen, yLen, xLen, yLen)
+
+    for i1 ∈ 1:xLen
+        for i2 ∈ 1:yLen
+            for i3 ∈ 1:xLen
+                for i4 ∈ 1:yLen
+
+                    p[i1, i2, i3, i4] = 1 / (xLen * yLen)
+                end
+            end
+        end
+    end
+
+    # Initialize mu
+
+    mu = @MArray zeros(Float64, xLen, yLen)
+
+    for i1 ∈ 1:xLen
+        for i2 ∈ 1:yLen
+            mu[i1, i2] = 1 / (xLen * yLen)
+        end
+    end
+
+    chi = @MArray zeros(Float64, N-1, xLen, xLen)
+    chi0 = @MArray zeros(Float64, xLen, xLen, yLen)
+    ro = @MArray zeros(Float64, N, xLen)
+    fil = @MArray zeros(Float64, N, xLen)
+    aa = @MArray zeros(Float64, N)
+
     pDiff = 10
     muDiff = 10
 
     while (pDiff > 0.05) || (muDiff > 0.05)
+    #Threads.@threads for i ∈ 1:1000000
 
-        pCopy = deepcopy(p)
-        muCopy = deepcopy(mu)
+    #    if (pDiff <= 0.05) && (muDiff <= 0.05)
+    #        break
+    #    end
+
+        pCopy = copy(p)
+        muCopy = copy(mu)
         
         # Forward propagation
-        forwardProp()
+        aa, chi, chi0, fil, mu, p, ro = forwardProp(aa, chi, chi0, fil, mu, p, ro)
 
         # Backward propagation
-        backwardProp()
+        aa, chi, chi0, fil, mu, p, ro = backwardProp(aa, chi, chi0, fil, mu, p, ro)
 
         # Probability update
-        updateP()
-        updateMu()
+        aa, chi, chi0, fil, mu, p, ro = updateP(aa, chi, chi0, fil, mu, p, ro)
+        aa, chi, chi0, fil, mu, p, ro = updateMu(aa, chi, chi0, fil, mu, p, ro)
 
         # Calculate difference between current p and mu and previous p and mu 
         # to assess convergence
-        pDiff, muDiff = calcConvergence(pCopy, muCopy)
+        pDiff, muDiff = calcConvergence(pCopy, muCopy, p, mu)
     end
+
+    return p, mu
 end
 
 # Assigns a bin to each observation and creates the new array of observations
@@ -344,13 +393,13 @@ function binData(data, binSize)
 
     for i ∈ 1:length(data)
         # obs[i] = data[i] ÷ binSize
-        push!(obs, trunc(Int, (round(data[i] / binSize))))
+        push!(obs, trunc(Int, (round(data[i] / binSize))) * binSize)
     end
 
     return obs
 end
 
-function getYSpace(data)
+function getYSpace(data, binSize)
 
     min = data[1]
     max = data[1]
@@ -365,7 +414,7 @@ function getYSpace(data)
 
     ySpace = []
 
-    for i ∈ min:max
+    for i ∈ min:binSize:max
         push!(ySpace, i)
     end
 
@@ -373,15 +422,19 @@ function getYSpace(data)
 
 end
 
-data = CSV.read("C:/Users/Jaime/OneDrive/Desktop/LCD_sample.csv", DataFrame, select=["HourlyDryBulbTemperatureC"]) # open and read data file
+# data = CSV.read("C:/Users/Jaime/OneDrive/Desktop/LCD_sample.csv", DataFrame, select=["HourlyDryBulbTemperatureC"]) # open and read data file
+data = CSV.read("C:/Users/Jaime/OneDrive/Desktop/Summer Kouritzin Research/weatherData/PADUCAH BARKLEY, KY, 2022.csv", DataFrame, select=["DailyAverageDryBulbTemperature"]) # open and read data file
 data = dropmissing(data, disallowmissing=true) # disregard missing data values
 
 unbinnedData = Array(data)
-Y = binData(unbinnedData, 5) # bin data
+unbinnedData = unbinnedData[1:10]
+binWidth = 1
+
+Y = binData(unbinnedData, binWidth) # bin data
 
 print(Y)
 
-ySpace = getYSpace(Y) # get Y state space
+ySpace = getYSpace(Y, binWidth) # get Y state space
 
 print(ySpace)
 
@@ -409,7 +462,14 @@ ySpace = [-20+n/10 for n=0:400] # hourly dry bulb temperature in Celsius (range 
 N = length(Y)
 xLen = length(xSpace) # size of hidden state space
 yLen = length(ySpace) # size of observable state space
-
+#=
+Y = [1, 2, 3]
+N = 3
+xSpace = [1, 2, 3]
+ySpace = [1, 2, 3]
+xLen = 3
+yLen = 3
+=#
 
 # Alternative way of initializing the transition probabilities p. 
 # This approach follows the initialization approach in the Markov 
@@ -417,7 +477,7 @@ yLen = length(ySpace) # size of observable state space
 
 ###################################################################
 #=
-transitions = zeros(Float64, yLen, yLen)
+transitions = zeros(Float32, yLen, yLen)
 
 for i1 ∈ 1:yLen
     for i2 ∈ 1:yLen
@@ -450,41 +510,10 @@ end
 =#
 ###################################################################
 
-# Initialize p
+pFinal, muFinal = @time emMom() # run EM-MOM algorithm to get final probability estimates
 
-p = zeros(Float64, xLen, yLen, xLen, yLen)
-
-for i1 ∈ 1:xLen
-    for i2 ∈ 1:yLen
-        for i3 ∈ 1:xLen
-            for i4 ∈ 1:yLen
-
-                p[i1, i2, i3, i4] = 1 / (xLen * yLen)
-            end
-        end
-    end
-end
-
-# Initialize mu
-
-mu = zeros(Float64, xLen, yLen)
-
-for i1 ∈ 1:xLen
-    for i2 ∈ 1:yLen
-        mu[i1, i2] = 1 / (xLen * yLen)
-    end
-end
-
-chi = zeros(Float64, N-1, xLen, xLen)
-chi0 = zeros(Float64, xLen, xLen, yLen)
-ro = zeros(Float64, N, xLen)
-fil = zeros(Float64, N, xLen)
-aa = zeros(Float64, N)
-
-emMom() # run EM-MOM algorithm to get final probability estimates
-
-print(p, "\n")
-print(mu, "\n")
+print(pFinal, "\n")
+print(muFinal, "\n")
 
 
 
